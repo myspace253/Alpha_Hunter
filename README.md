@@ -119,7 +119,7 @@ alpha-hunter/
 ### 2. Install
 
 ```bash
-git clone https://github.com/myspace253/Alpha_Hunter.git
+git clone <your-repo-url> alpha-hunter
 cd alpha-hunter
 npm install
 ```
@@ -271,6 +271,31 @@ This scaffold implements the **MVP** phase end-to-end. What's stubbed vs. real:
   Narrative Detection" behavior described in the original spec.
 - `services/ai/llmClient.ts` is a small provider-agnostic wrapper (`LLM_PROVIDER=openai` today) —
   reuse it for the AI Assistant chat feature (`OPENAI_API_KEY` is already wired for that too).
+
+**Also real now — Configurable AI Provider/Router (ZenMux-compatible):**
+- The LLM calls in `narrativeClassifier.ts` and `aiAssistant.ts` no longer hit a hardcoded
+  `api.openai.com` — the endpoint is built from `AI_BASE_URL` (default: OpenAI's own endpoint),
+  so you can point the whole AI layer at a router/proxy like [ZenMux](https://zenmux.ai) without
+  touching any code:
+  ```
+  AI_BASE_URL=https://zenmux.ai/api/v1
+  API_TIMEOUT_MS=600000
+  ```
+  `OPENAI_API_KEY` is still sent as the bearer token — use your ZenMux (or other router) key
+  there. `OPENAI_MODEL` selects which model the router forwards to.
+- `API_TIMEOUT_MS` controls the request timeout for every LLM call (narrative classification,
+  the `/ask` agent). Defaults to 10 minutes since routers/proxies to slower or queued models
+  often need more headroom than a direct OpenAI call would.
+
+**Also real now — Clickable Contract Links (Solscan / Birdeye / DexScreener):**
+- Every message that shows a token — `/hot`, `/new`, `/trending`, `/analysis`, `/risk`,
+  `/whales`, `/narrative`, `/social`, `/compare`, `/watch`, `/watchlist`, and auto-alerts — now
+  includes the full contract address as tap-to-copy code, plus inline buttons that open the token
+  directly on Solscan and Birdeye (DexScreener too, on single-token views).
+- `services/telegram/formatters.ts::explorerLinks()` builds the three URLs from a bare address;
+  `tokenActionKeyboard()` / `tokenListKeyboard()` build the Telegram inline keyboards. If you want
+  to add another explorer (e.g. Solana Beach, Jupiter swap link), add it in one place there and
+  it propagates to every command automatically.
 
 **Also real now — AI Assistant Agent (free-form Q&A):**
 - `services/ai/aiAssistant.ts` runs a bounded tool-calling agent loop against OpenAI: the model

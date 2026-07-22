@@ -2,6 +2,12 @@ import axios from "axios";
 import { env } from "../../config/env";
 import { logger } from "../../utils/logger";
 
+/**
+ * Chat completions endpoint, built from AI_BASE_URL so this can point at OpenAI directly,
+ * ZenMux (https://zenmux.ai/api/v1), or any other OpenAI-compatible router without code changes.
+ */
+const CHAT_COMPLETIONS_URL = `${env.AI_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
+
 export interface LLMJsonRequest {
   system: string;
   user: string;
@@ -16,8 +22,8 @@ export function isLLMConfigured(): boolean {
 
 /**
  * Calls the configured LLM provider and returns raw text output.
- * Currently supports OpenAI's chat completions endpoint. Swap the body of this function
- * (or branch on env.LLM_PROVIDER) to point at Anthropic, a self-hosted gateway, etc.
+ * Uses the OpenAI-compatible chat completions shape at AI_BASE_URL — this works unmodified
+ * against OpenAI itself, ZenMux, or any other router that speaks the same API surface.
  */
 export async function completeJson(req: LLMJsonRequest): Promise<string | null> {
   if (!isLLMConfigured()) {
@@ -32,7 +38,7 @@ export async function completeJson(req: LLMJsonRequest): Promise<string | null> 
 
   try {
     const { data } = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
+      CHAT_COMPLETIONS_URL,
       {
         model: env.OPENAI_MODEL,
         messages: [
@@ -48,13 +54,13 @@ export async function completeJson(req: LLMJsonRequest): Promise<string | null> 
           Authorization: `Bearer ${env.OPENAI_API_KEY}`,
           "Content-Type": "application/json",
         },
-        timeout: 15_000,
+        timeout: env.API_TIMEOUT_MS,
       }
     );
 
     return data?.choices?.[0]?.message?.content ?? null;
   } catch (err) {
-    logger.error({ err }, "llmClient.completeJson failed");
+    logger.error({ err, url: CHAT_COMPLETIONS_URL }, "llmClient.completeJson failed");
     return null;
   }
 }
@@ -106,7 +112,7 @@ export async function chatWithTools(
 
   try {
     const { data } = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
+      CHAT_COMPLETIONS_URL,
       {
         model: env.OPENAI_MODEL,
         messages,
@@ -119,7 +125,7 @@ export async function chatWithTools(
           Authorization: `Bearer ${env.OPENAI_API_KEY}`,
           "Content-Type": "application/json",
         },
-        timeout: 20_000,
+        timeout: env.API_TIMEOUT_MS,
       }
     );
 
@@ -134,7 +140,7 @@ export async function chatWithTools(
 
     return { content: message.content ?? null, toolCalls };
   } catch (err) {
-    logger.error({ err }, "llmClient.chatWithTools failed");
+    logger.error({ err, url: CHAT_COMPLETIONS_URL }, "llmClient.chatWithTools failed");
     return null;
   }
 }

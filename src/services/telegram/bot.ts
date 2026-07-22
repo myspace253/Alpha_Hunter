@@ -2,7 +2,7 @@ import { Telegraf } from "telegraf";
 import { env, alertChatIds } from "../../config/env";
 import { logger } from "../../utils/logger";
 import { analyzeTokenByAddress } from "../scoring/analyze";
-import { formatAlertMessage, formatAnalysisMessage, formatTokenListMessage } from "./formatters";
+import { formatAlertMessage, formatAnalysisMessage, formatTokenListMessage, tokenActionKeyboard, tokenListKeyboard } from "./formatters";
 import { addToWatchlist, getTopScoredTokens, getWatchlist } from "../db/postgres";
 import { getReputation, getTopWalletsByWinRate } from "../wallets/walletReputation";
 import { askAssistant } from "../ai/aiAssistant";
@@ -60,9 +60,9 @@ async function replyWithAnalysis(ctx: any, tokenAddress: string, mode: "full" | 
   }
   const message =
     mode === "risk"
-      ? `⚠️ *Risk Report: ${result.token.symbol}*\n\nRisk: ${result.risk.riskLevel} (${result.risk.riskScore}/100)\n\n${result.risk.reasons.map((r) => `• ${r}`).join("\n")}`
+      ? `⚠️ *Risk Report: ${result.token.symbol}*\n\nRisk: ${result.risk.riskLevel} (${result.risk.riskScore}/100)\n\n${result.risk.reasons.map((r) => `• ${r}`).join("\n")}\n\n\`${result.token.address}\``
       : formatAnalysisMessage(result);
-  await ctx.reply(message, { parse_mode: "Markdown" });
+  await ctx.reply(message, { parse_mode: "Markdown", ...tokenActionKeyboard(result.token.address) });
 }
 
 bot.command("analysis", async (ctx) => {
@@ -83,7 +83,10 @@ bot.command("narrative", async (ctx) => {
   const result = await analyzeTokenByAddress(address);
   if (!result) return ctx.reply("Token not found.");
   const tags = result.token.narrative.map((n) => `• ${n.category} (${Math.round(n.confidence * 100)}% confidence)`);
-  await ctx.reply(`*Narrative for ${result.token.symbol}*\n\n${tags.join("\n")}`, { parse_mode: "Markdown" });
+  await ctx.reply(`*Narrative for ${result.token.symbol}*\n\n${tags.join("\n")}\n\n\`${result.token.address}\``, {
+    parse_mode: "Markdown",
+    ...tokenActionKeyboard(result.token.address),
+  });
 });
 
 bot.command("whales", async (ctx) => {
@@ -97,7 +100,10 @@ bot.command("whales", async (ctx) => {
   const lines = result.token.wallets.map(
     (w) => `• ${w.label} \`${w.address.slice(0, 6)}...\` — ${w.isBuying ? "BUYING" : "watching"} — win rate ${w.historicalWinRatePct ?? "N/A"}%`
   );
-  await ctx.reply(`*Whale activity: ${result.token.symbol}*\n\n${lines.join("\n")}`, { parse_mode: "Markdown" });
+  await ctx.reply(`*Whale activity: ${result.token.symbol}*\n\n${lines.join("\n")}\n\n\`${result.token.address}\``, {
+    parse_mode: "Markdown",
+    ...tokenActionKeyboard(result.token.address),
+  });
 });
 
 bot.command("compare", async (ctx) => {
@@ -109,24 +115,42 @@ bot.command("compare", async (ctx) => {
     `*Comparison*`,
     ``,
     `${ra.token.symbol}: Score ${ra.score.total} | Risk ${ra.risk.riskLevel} | ${ra.score.expectedMultiple}`,
+    `\`${ra.token.address}\``,
+    ``,
     `${rb.token.symbol}: Score ${rb.score.total} | Risk ${rb.risk.riskLevel} | ${rb.score.expectedMultiple}`,
+    `\`${rb.token.address}\``,
   ].join("\n");
-  await ctx.reply(msg, { parse_mode: "Markdown" });
+  await ctx.reply(msg, {
+    parse_mode: "Markdown",
+    ...tokenListKeyboard([
+      { token_address: ra.token.address, symbol: ra.token.symbol },
+      { token_address: rb.token.address, symbol: rb.token.symbol },
+    ]),
+  });
 });
 
 bot.command("hot", async (ctx) => {
   const rows = await getTopScoredTokens(10);
-  await ctx.reply(formatTokenListMessage("🔥 *Highest AI Score Right Now*", rows), { parse_mode: "Markdown" });
+  await ctx.reply(formatTokenListMessage("🔥 *Highest AI Score Right Now*", rows), {
+    parse_mode: "Markdown",
+    ...tokenListKeyboard(rows),
+  });
 });
 
 bot.command("trending", async (ctx) => {
   const rows = await getTopScoredTokens(10);
-  await ctx.reply(formatTokenListMessage("📈 *Trending*", rows), { parse_mode: "Markdown" });
+  await ctx.reply(formatTokenListMessage("📈 *Trending*", rows), {
+    parse_mode: "Markdown",
+    ...tokenListKeyboard(rows),
+  });
 });
 
 bot.command("new", async (ctx) => {
   const rows = await getTopScoredTokens(10);
-  await ctx.reply(formatTokenListMessage("🆕 *Recently Scanned Tokens*", rows), { parse_mode: "Markdown" });
+  await ctx.reply(formatTokenListMessage("🆕 *Recently Scanned Tokens*", rows), {
+    parse_mode: "Markdown",
+    ...tokenListKeyboard(rows),
+  });
 });
 
 bot.command("watch", async (ctx) => {
@@ -135,14 +159,19 @@ bot.command("watch", async (ctx) => {
   const result = await analyzeTokenByAddress(address);
   if (!result) return ctx.reply("Token not found.");
   await addToWatchlist(String(ctx.chat.id), address, result.token.symbol);
-  await ctx.reply(`✅ Added ${result.token.symbol} to your watchlist. I'll alert you on whale buys or liquidity spikes.`);
+  await ctx.reply(`✅ Added ${result.token.symbol} to your watchlist. I'll alert you on whale buys or liquidity spikes.`, {
+    ...tokenActionKeyboard(address),
+  });
 });
 
 bot.command("watchlist", async (ctx) => {
   const rows = await getWatchlist(String(ctx.chat.id));
   if (rows.length === 0) return ctx.reply("Your watchlist is empty. Use /watch <token_address> to add one.");
   const lines = rows.map((r: any) => `• ${r.symbol} — \`${r.token_address}\``);
-  await ctx.reply(`*Your Watchlist*\n\n${lines.join("\n")}`, { parse_mode: "Markdown" });
+  await ctx.reply(`*Your Watchlist*\n\n${lines.join("\n")}`, {
+    parse_mode: "Markdown",
+    ...tokenListKeyboard(rows.map((r: any) => ({ token_address: r.token_address, symbol: r.symbol }))),
+  });
 });
 
 bot.command("wallet", async (ctx) => {
@@ -194,8 +223,10 @@ bot.command("social", async (ctx) => {
     `Sentiment: ${s.sentimentScore !== undefined ? (s.sentimentScore > 0.15 ? "🟢 Bullish" : s.sentimentScore < -0.15 ? "🔴 Bearish" : "🟡 Neutral") + ` (${s.sentimentScore.toFixed(2)})` : "N/A"}`,
     ``,
     `_Mention growth is computed from this bot's own tracked history — it builds up accuracy the longer a token has been scanned._`,
+    ``,
+    `\`${result.token.address}\``,
   ];
-  await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+  await ctx.reply(lines.join("\n"), { parse_mode: "Markdown", ...tokenActionKeyboard(result.token.address) });
 });
 
 bot.command("ask", async (ctx) => {
@@ -239,7 +270,10 @@ export async function broadcastAlert(result: AnalysisResult) {
   const message = formatAlertMessage(result);
   for (const chatId of alertChatIds) {
     try {
-      await bot.telegram.sendMessage(chatId, message, { parse_mode: "Markdown" });
+      await bot.telegram.sendMessage(chatId, message, {
+        parse_mode: "Markdown",
+        ...tokenActionKeyboard(result.token.address),
+      });
     } catch (err) {
       logger.error({ err, chatId }, "failed to send telegram alert");
     }

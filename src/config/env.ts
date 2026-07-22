@@ -27,6 +27,14 @@ const EnvSchema = z.object({
   OPENAI_API_KEY: z.string().optional().default(""),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   LLM_PROVIDER: z.string().default("openai"),
+  // Base URL for the OpenAI-compatible chat completions API. Point this at a router/proxy
+  // (e.g. ZenMux: https://zenmux.ai/api/v1) to swap providers/models without code changes —
+  // OPENAI_API_KEY is still sent as the bearer token either way.
+  AI_BASE_URL: z.string().default("https://api.openai.com/v1"),
+  // Request timeout for LLM calls, in milliseconds. Routers that proxy to slower/reasoning
+  // models (or that queue requests) often need much more headroom than a direct OpenAI call —
+  // default is generous (10 min) so a slow model doesn't get killed mid-response.
+  API_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
 
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   REDIS_URL: z.string().optional().default(""),
