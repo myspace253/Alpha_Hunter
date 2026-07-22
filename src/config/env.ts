@@ -1,0 +1,57 @@
+import "dotenv/config";
+import { z } from "zod";
+
+const EnvSchema = z.object({
+  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  LOG_LEVEL: z.string().default("info"),
+  SCAN_INTERVAL_SECONDS: z.coerce.number().int().positive().default(30),
+
+  TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
+  TELEGRAM_ALERT_CHAT_IDS: z.string().default(""),
+
+  HELIUS_API_KEY: z.string().optional().default(""),
+  HELIUS_RPC_URL: z.string().optional().default(""),
+  QUICKNODE_RPC_URL: z.string().optional().default(""),
+  ALCHEMY_RPC_URL: z.string().optional().default(""),
+  SHYFT_API_KEY: z.string().optional().default(""),
+
+  DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
+  BIRDEYE_API_KEY: z.string().optional().default(""),
+  BIRDEYE_BASE_URL: z.string().default("https://public-api.birdeye.so"),
+  JUPITER_BASE_URL: z.string().default("https://lite-api.jup.ag"),
+
+  TWITTER_BEARER_TOKEN: z.string().optional().default(""),
+  LUNARCRUSH_API_KEY: z.string().optional().default(""),
+  CRYPTOPANIC_API_KEY: z.string().optional().default(""),
+
+  OPENAI_API_KEY: z.string().optional().default(""),
+  OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  LLM_PROVIDER: z.string().default("openai"),
+
+  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  REDIS_URL: z.string().optional().default(""),
+
+  MIN_ALERT_SCORE: z.coerce.number().min(0).max(100).default(70),
+  MAX_ALERT_RISK: z.coerce.number().min(0).max(100).default(40),
+});
+
+export type Env = z.infer<typeof EnvSchema>;
+
+function loadEnv(): Env {
+  const parsed = EnvSchema.safeParse(process.env);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+      .join("\n");
+    // eslint-disable-next-line no-console
+    console.error(`Invalid environment configuration:\n${issues}`);
+    process.exit(1);
+  }
+  return parsed.data;
+}
+
+export const env = loadEnv();
+
+export const alertChatIds = env.TELEGRAM_ALERT_CHAT_IDS.split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
