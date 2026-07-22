@@ -4,9 +4,10 @@ import {
   getPairsForTokenAddress,
 } from "../dex/dexscreener";
 import { getTokenSecurity, getTokenHolderCount } from "../dex/birdeye";
-import type { OnChainMetrics, SocialMetrics, TokenSnapshot, NarrativeTag } from "../../types";
+import type { OnChainMetrics, TokenSnapshot, NarrativeTag } from "../../types";
 import { classifyNarrative } from "../scoring/narrativeClassifier";
 import { analyzeWallets } from "../wallets/walletAnalyzer";
+import { collectSocialMetrics } from "../social/socialMonitor";
 
 /**
  * Discovers candidate tokens to analyze this scan cycle.
@@ -17,12 +18,6 @@ export async function discoverCandidateTokens(): Promise<string[]> {
   const boosted = await getLatestBoostedTokens();
   const addresses = boosted.map((t) => t.tokenAddress).filter(Boolean);
   return Array.from(new Set(addresses));
-}
-
-/** Placeholder social signal collection — wire up Twitter/Telegram/LunarCrush here. */
-async function collectSocialMetrics(_tokenAddress: string, _symbol: string): Promise<SocialMetrics> {
-  // TODO: call Twitter recent-search API / LunarCrush for mention growth + sentiment.
-  return { trending: false };
 }
 
 export async function buildTokenSnapshot(tokenAddress: string): Promise<TokenSnapshot | null> {
@@ -62,9 +57,12 @@ export async function buildTokenSnapshot(tokenAddress: string): Promise<TokenSna
     collectSocialMetrics(tokenAddress, primaryPair.baseToken.symbol),
   ]);
 
-  const narrative: NarrativeTag[] = classifyNarrative(
-    `${primaryPair.baseToken.name} ${primaryPair.baseToken.symbol}`
-  );
+  const narrative: NarrativeTag[] = await classifyNarrative({
+    tokenAddress,
+    name: primaryPair.baseToken.name,
+    symbol: primaryPair.baseToken.symbol,
+    extra: social.trending ? "This token is currently trending on social media." : undefined,
+  });
 
   const snapshot: TokenSnapshot = {
     address: tokenAddress,

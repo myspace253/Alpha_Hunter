@@ -1,5 +1,6 @@
 import type { AlphaScore, ScoreBreakdown, TokenSnapshot } from "../../types";
 import { assessRisk } from "./riskEngine";
+import { getNarrativeMomentum } from "./narrativeTrends";
 
 /**
  * Weights match the spec's "AI Score" breakdown:
@@ -60,10 +61,11 @@ function computeHolderScore(token: TokenSnapshot): number {
 function computeNarrativeScore(token: TokenSnapshot): number {
   if (token.narrative.length === 0) return 30;
   const top = token.narrative[0];
-  // "Hot" narratives get a bump; wire this to real trend data (Google Trends / X) in v2.
-  const hotNarratives = new Set(["Agent", "Meme", "DePIN"]);
   const base = top.confidence * 100;
-  return hotNarratives.has(top.category) ? Math.min(100, base + 15) : base;
+  // Momentum (0..1) reflects how much this narrative's scan-frequency has grown in the last
+  // 24h vs the prior 24h — see narrativeTrends.ts. A rising narrative earns up to +25 points.
+  const momentum = getNarrativeMomentum(top.category);
+  return Math.min(100, base + momentum * 25);
 }
 
 function computeDeveloperScore(token: TokenSnapshot): number {

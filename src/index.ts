@@ -3,6 +3,7 @@ import { launchBot } from "./services/telegram/bot";
 import { scheduleScanJob, runScanCycle } from "./services/scanJob";
 import { pool } from "./services/db/postgres";
 import { updateWalletReputations } from "./services/wallets/reputationUpdater";
+import { scheduleNarrativeMomentumJob } from "./services/scoring/narrativeTrends";
 
 const REPUTATION_UPDATE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
@@ -27,6 +28,9 @@ async function main() {
   // Wallet reputation is recomputed hourly from closed (buy→sell) positions.
   void updateWalletReputations();
   setInterval(() => void updateWalletReputations(), REPUTATION_UPDATE_INTERVAL_MS);
+
+  // Narrative momentum (which categories are heating up) refreshes every 15 minutes.
+  scheduleNarrativeMomentumJob();
 
   logger.info("Solana AI Alpha Hunter is running.");
 }

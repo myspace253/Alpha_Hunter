@@ -82,10 +82,19 @@ alpha-hunter/
 │   │   │   ├── walletAnalyzer.ts     # top-holder resolution, classification, buy/sell detection
 │   │   │   ├── walletReputation.ts   # DB layer for wallet_reputation / wallet_positions
 │   │   │   └── reputationUpdater.ts  # hourly job: FIFO-matches trades, recomputes win rates
+│   │   ├── social/
+│   │   │   ├── lunarcrush.ts       # crypto-native sentiment/social volume
+│   │   │   ├── twitterClient.ts    # $SYMBOL cashtag mention counts
+│   │   │   └── socialMonitor.ts    # orchestrates both + real mention-growth tracking
+│   │   ├── ai/
+│   │   │   ├── llmClient.ts        # provider-agnostic LLM wrapper (OpenAI, JSON mode + tool calling)
+│   │   │   ├── tools.ts            # tool definitions/executors the assistant agent can call
+│   │   │   └── aiAssistant.ts      # bounded tool-calling agent loop for free-form Q&A
 │   │   ├── scoring/
 │   │   │   ├── scoringEngine.ts   # weighted AI Score (0-100)
 │   │   │   ├── riskEngine.ts      # rugpull/honeypot risk flags
-│   │   │   ├── narrativeClassifier.ts
+│   │   │   ├── narrativeClassifier.ts  # LLM classification + cache + keyword fallback
+│   │   │   ├── narrativeTrends.ts      # 15-min momentum job (rising vs. cooling narratives)
 │   │   │   └── analyze.ts         # orchestrates score + risk + explanations
 │   │   ├── db/
 │   │   │   ├── postgres.ts
@@ -185,7 +194,9 @@ In Telegram, message your bot and try:
 | `/risk <address>` | risk-only breakdown |
 | `/whales <address>` | whale/smart-money wallet activity |
 | `/wallet [address]` | a wallet's reputation profile, or top wallets by win rate if omitted |
+| `/ask <question>` | free-form Q&A — the AI agent pulls live data to answer (also works via plain text, no command needed) |
 | `/narrative <address>` | detected narrative tags |
+| `/social <address>` | Twitter mentions, growth, and sentiment |
 | `/compare <addr1> <addr2>` | side-by-side comparison |
 | `/watch <address>` | add to personal watchlist |
 | `/watchlist` | show your watchlist |
@@ -244,14 +255,63 @@ This scaffold implements the **MVP** phase end-to-end. What's stubbed vs. real:
   `getSignaturesForAddress`, which only sees a rolling history window on public RPC nodes — good
   enough for recent launches, not archival-accurate for old wallets.
 
+**Also real now — LLM-Based Narrative Classification:**
+- `services/scoring/narrativeClassifier.ts` classifies each token's narrative (`Agent`, `Meme`,
+  `DePIN`, `Gaming`, `RWA`, `DeFi`, `Consumer Crypto`, `Other`) with a real LLM call (OpenAI by
+  default — see `OPENAI_API_KEY` / `OPENAI_MODEL` in `.env`), constrained to strict JSON output
+  and validated against the allowed category list before use.
+- Results are cached in a new `narrative_cache` table for 24h per token, so the scan loop doesn't
+  re-classify the same token (and re-spend API credits) every cycle.
+- If `OPENAI_API_KEY` is unset, or the LLM call/parse fails for any reason, it automatically falls
+  back to the original keyword matcher — narrative scoring never silently drops to zero.
+- `services/scoring/narrativeTrends.ts` adds real **narrative momentum**: every 15 minutes it
+  compares how often each category has shown up in scanned tokens over the last 24h vs. the prior
+  24h and feeds that growth rate into the Narrative Score (up to +25 points for a narrative that's
+  genuinely accelerating) — replacing the old hardcoded "hot narratives" list with the "Early
+  Narrative Detection" behavior described in the original spec.
+- `services/ai/llmClient.ts` is a small provider-agnostic wrapper (`LLM_PROVIDER=openai` today) —
+  reuse it for the AI Assistant chat feature (`OPENAI_API_KEY` is already wired for that too).
+
+**Also real now — AI Assistant Agent (free-form Q&A):**
+- `services/ai/aiAssistant.ts` runs a bounded tool-calling agent loop against OpenAI: the model
+  decides which of your live data sources it needs, calls them, reads the results, and answers
+  in plain language — it never guesses numbers from memory.
+- `services/ai/tools.ts` defines the tool set it can call: `analyze_token`, `get_wallet_reputation`,
+  `get_top_wallets`, `get_top_tokens`, `get_narrative_momentum`, `get_watchlist`. Each maps
+  directly to a function already built for the Telegram commands, so the agent and the slash
+  commands stay in sync automatically.
+- Capped at 4 tool-calling iterations per question to bound latency and API cost; falls back to
+  a clear "not configured" message if `OPENAI_API_KEY` is unset, rather than failing silently.
+- `get_watchlist`'s `chatId` is injected by the bot layer, not exposed as a model-controllable
+  parameter — the agent can't be prompted into reading a different chat's watchlist.
+- Wired into Telegram two ways: `/ask <question>` explicitly, and any plain-text message that
+  isn't a recognized command falls through to the assistant automatically (e.g. paste an address
+  and ask "is this safe?"). A Solana address found anywhere in the message is passed along as
+  context even if the user doesn't explicitly say "token address: ...".
+
+**Also real now — Social Signal Collection:**
+- `services/social/lunarcrush.ts` pulls crypto-native social data (social volume, sentiment,
+  Galaxy Score) via LunarCrush — the best source for sentiment specifically, though it mainly
+  covers established/listed coins, not every fresh pump.fun mint.
+- `services/social/twitterClient.ts` queries Twitter/X's recent tweet-counts endpoint for
+  `$SYMBOL` cashtag mentions as a supplement/fallback (note: this endpoint requires at least
+  Basic API access, not the free tier).
+- `services/social/socialMonitor.ts` orchestrates both, and — like `narrativeTrends.ts` and the
+  wallet reputation system — computes **real mention growth** by comparing the bot's own recorded
+  history (last 24h vs. prior 24h in a new `social_snapshots` table) rather than trusting an
+  external API's self-reported "24h change" field, which isn't consistently available across
+  providers. `trending` only flips true once a token clears both a minimum mention floor and a
+  growth threshold, filtering out noise from a handful of bot mentions.
+- New `/social <address>` Telegram command and a matching `get_social_signals` AI Assistant tool
+  surface this directly.
+- Known limitation, by design: Telegram member growth (`telegramMemberGrowthPct`) is left unset.
+  Tracking an arbitrary token's Telegram channel requires the bot to be a member/admin of that
+  specific channel — not something that can be done generically for every token scanned. Wire it
+  up per-community if that becomes a priority.
+
 **Stubbed (clear `TODO` markers in code) — ready for Version 2/3 work:**
-- `tokenScanner.ts::collectSocialMetrics()` — wire to Twitter/X API, Telegram, LunarCrush
 - `scoringEngine.ts::computeDeveloperScore()` — wire to GitHub API for AI-narrative tokens
-- `narrativeClassifier.ts` — currently keyword-based; swap for Sentence-Transformers embeddings
 - `riskEngine.ts::honeypotRisk` — needs a simulated sell-transaction check via RPC
-- AI Assistant chat ("why is this token good?" free-form Q&A via LLM) — `OPENAI_API_KEY` is
-  already in `.env.example`; add an `aiAssistant.ts` service that feeds `AnalysisResult` as
-  context to the LLM
 - Backtesting engine — `backtest_results` table exists; needs a historical price replay job
 - Web dashboard (Vue 3 + Tailwind, per the original spec) — not included in this backend-only
   scaffold

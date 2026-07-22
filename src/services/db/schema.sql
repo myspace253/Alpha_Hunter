@@ -38,6 +38,27 @@ CREATE TABLE IF NOT EXISTS wallet_reputation (
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS social_snapshots (
+  id                    BIGSERIAL PRIMARY KEY,
+  token_address         TEXT NOT NULL,
+  symbol                TEXT NOT NULL,
+  source                TEXT NOT NULL, -- 'twitter', 'lunarcrush'
+  mentions              INTEGER,
+  sentiment_score       NUMERIC(4,3), -- -1..1
+  collected_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_snapshots_token
+  ON social_snapshots (token_address, collected_at);
+
+CREATE TABLE IF NOT EXISTS narrative_cache (
+  token_address         TEXT PRIMARY KEY,
+  narrative             JSONB NOT NULL, -- [{ "category": "Agent", "confidence": 0.82 }, ...]
+  source                TEXT NOT NULL DEFAULT 'keyword', -- 'llm' or 'keyword' (fallback)
+  model                 TEXT,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS wallet_positions (
   id                    BIGSERIAL PRIMARY KEY,
   wallet_address        TEXT NOT NULL,

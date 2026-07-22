@@ -5,7 +5,15 @@ import { analyzeTokenByAddress } from "../scoring/analyze";
 import { formatAlertMessage, formatAnalysisMessage, formatTokenListMessage } from "./formatters";
 import { addToWatchlist, getTopScoredTokens, getWatchlist } from "../db/postgres";
 import { getReputation, getTopWalletsByWinRate } from "../wallets/walletReputation";
+import { askAssistant } from "../ai/aiAssistant";
 import type { AnalysisResult } from "../../types";
+
+/** Loosely matches a Solana base58 address (32-44 chars, excludes 0/O/I/l) inside free text. */
+const SOLANA_ADDRESS_REGEX = /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/;
+
+function extractAddressHint(text: string): string | undefined {
+  return text.match(SOLANA_ADDRESS_REGEX)?.[0];
+}
 
 export const bot = new Telegraf(env.TELEGRAM_BOT_TOKEN);
 
@@ -33,8 +41,11 @@ bot.help((ctx) =>
       "/whales <token_address> — whale & smart-money wallet activity",
       "/wallet <address> — a wallet's reputation profile (or top wallets if no address given)",
       "/narrative <token_address> — detected narrative tags",
+      "/social <token_address> — Twitter mentions, growth, and sentiment",
       "/compare <addr1> <addr2> — compare two tokens",
       "/settings — configure alert thresholds",
+      "",
+      "💬 Or just ask me anything in plain text — e.g. \"why is this token risky <address>\" or \"who are the best performing wallets right now\" — I'll pull live data to answer.",
     ].join("\n"),
     { parse_mode: "Markdown" }
   )
@@ -168,12 +179,59 @@ bot.command("wallet", async (ctx) => {
   await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
 });
 
+bot.command("social", async (ctx) => {
+  const address = ctx.message.text.split(" ")[1];
+  if (!address) return ctx.reply("Usage: /social <token_address>");
+  const result = await analyzeTokenByAddress(address);
+  if (!result) return ctx.reply("Token not found.");
+  const s = result.token.social;
+  const lines = [
+    `*Social Signals: ${result.token.symbol}*`,
+    ``,
+    `Trending: ${s.trending ? "🔥 Yes" : "No"}`,
+    `Mentions (24h, tracked): ${s.twitterMentions24h ?? "N/A"}`,
+    `Mention growth (24h vs prior 24h): ${s.twitterMentionGrowthPct !== undefined ? `${s.twitterMentionGrowthPct.toFixed(0)}%` : "N/A (not enough history yet)"}`,
+    `Sentiment: ${s.sentimentScore !== undefined ? (s.sentimentScore > 0.15 ? "🟢 Bullish" : s.sentimentScore < -0.15 ? "🔴 Bearish" : "🟡 Neutral") + ` (${s.sentimentScore.toFixed(2)})` : "N/A"}`,
+    ``,
+    `_Mention growth is computed from this bot's own tracked history — it builds up accuracy the longer a token has been scanned._`,
+  ];
+  await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+});
+
+bot.command("ask", async (ctx) => {
+  const question = ctx.message.text.split(" ").slice(1).join(" ").trim();
+  if (!question) return ctx.reply("Usage: /ask <your question>, e.g. /ask why is this token risky <address>");
+  await ctx.sendChatAction("typing");
+  const { answer } = await askAssistant(question, {
+    chatId: String(ctx.chat.id),
+    tokenAddressHint: extractAddressHint(question),
+  });
+  await ctx.reply(answer, { parse_mode: "Markdown" });
+});
+
 bot.command("settings", async (ctx) => {
   await ctx.reply(
     `*Current Alert Thresholds*\n\nMin AI Score: ${env.MIN_ALERT_SCORE}\nMax Risk: ${env.MAX_ALERT_RISK}\n\n` +
       `Edit MIN_ALERT_SCORE / MAX_ALERT_RISK in your .env to change these.`,
     { parse_mode: "Markdown" }
   );
+});
+
+/**
+ * Any text message that didn't match a slash command above falls through to here.
+ * Telegraf's middleware chain only reaches this handler for unmatched messages, so this
+ * safely coexists with all the /commands registered earlier.
+ */
+bot.on("text", async (ctx) => {
+  const text = ctx.message.text.trim();
+  if (!text || text.startsWith("/")) return; // unrecognized command — don't treat as a question
+
+  await ctx.sendChatAction("typing");
+  const { answer } = await askAssistant(text, {
+    chatId: String(ctx.chat.id),
+    tokenAddressHint: extractAddressHint(text),
+  });
+  await ctx.reply(answer, { parse_mode: "Markdown" });
 });
 
 /** Broadcasts a formatted alert to all configured alert chat IDs. */
