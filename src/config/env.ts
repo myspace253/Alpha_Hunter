@@ -14,10 +14,17 @@ const EnvSchema = z.object({
   QUICKNODE_RPC_URL: z.string().optional().default(""),
   ALCHEMY_RPC_URL: z.string().optional().default(""),
   SHYFT_API_KEY: z.string().optional().default(""),
+  // Max requests/second sent to Helius's enhanced-transactions REST API (getEnhancedTransactions,
+  // used for buy/sell detection). Free/dev-tier Helius keys are easy to exceed when analyzing
+  // several wallets per token — lower this if you're still seeing 429s.
+  HELIUS_RATE_LIMIT_PER_SEC: z.coerce.number().positive().default(2),
 
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
   BIRDEYE_API_KEY: z.string().optional().default(""),
   BIRDEYE_BASE_URL: z.string().default("https://public-api.birdeye.so"),
+  // Birdeye's free tier is commonly capped at 1 request/second — check your plan's actual
+  // limit (visible in the `X-RateLimit-Limit` response header) and adjust accordingly.
+  BIRDEYE_RATE_LIMIT_PER_SEC: z.coerce.number().positive().default(1),
   JUPITER_BASE_URL: z.string().default("https://lite-api.jup.ag"),
 
   TWITTER_BEARER_TOKEN: z.string().optional().default(""),

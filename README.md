@@ -103,7 +103,9 @@ alpha-hunter/
 │   │   └── telegram/
 │   │       ├── bot.ts             # Telegraf commands + alert broadcaster
 │   │       └── formatters.ts      # message templates
-│   └── utils/logger.ts
+│   └── utils/
+│       ├── logger.ts
+│       └── rateLimiter.ts      # shared 429 backoff + per-API throttling (Helius, Birdeye)
 ```
 
 ## Getting started
@@ -340,6 +342,30 @@ This scaffold implements the **MVP** phase end-to-end. What's stubbed vs. real:
 - Backtesting engine — `backtest_results` table exists; needs a historical price replay job
 - Web dashboard (Vue 3 + Tailwind, per the original spec) — not included in this backend-only
   scaffold
+
+## Troubleshooting
+
+**`429 Too Many Requests` from Helius or Birdeye**
+Both clients now throttle requests to `HELIUS_RATE_LIMIT_PER_SEC` / `BIRDEYE_RATE_LIMIT_PER_SEC`
+(defaults: 2/sec and 1/sec) and automatically retry on 429 with backoff (honoring the provider's
+`Retry-After` header when present). If you're still seeing persistent 429s:
+- Lower the relevant `*_RATE_LIMIT_PER_SEC` value in `.env` to match your actual plan limit —
+  check the `X-RateLimit-Limit` response header Birdeye/Helius send back, or your account
+  dashboard, rather than guessing.
+- Increase `SCAN_INTERVAL_SECONDS` so fewer tokens get analyzed per minute.
+- Upgrade your Helius/Birdeye plan if you're running this against a real token volume — the free
+  tiers are meant for light testing, not a 24/7 scanner.
+- Helius wallet buy/sell checks (`getEnhancedTransactions`) are cached for 3 minutes per wallet,
+  so repeated scan cycles within that window reuse the same fetch instead of re-hitting the API.
+
+**`402 Payment Required` from your LLM provider (e.g. ZenMux)**
+This is not a bug — it's the provider declining the request, not a rate limit or code error.
+ZenMux specifically returns this for some "free" models as an anti-abuse measure: the model is
+only usable once the account holds *some* balance, even though using it doesn't cost anything.
+Fix by either topping up a small balance on the provider account, or switching `OPENAI_MODEL` to
+a model that doesn't have that restriction. The bot already degrades gracefully when this
+happens — narrative classification falls back to the keyword matcher, and `/ask` returns a
+"couldn't reach the AI assistant" message instead of crashing.
 
 ## Disclaimer
 

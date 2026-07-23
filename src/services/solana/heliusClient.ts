@@ -1,6 +1,7 @@
 import axios from "axios";
 import { env } from "../../config/env";
 import { logger } from "../../utils/logger";
+import { RateLimiter, withRateLimitRetry } from "../../utils/rateLimiter";
 
 const rpcUrl = env.HELIUS_RPC_URL || undefined;
 
@@ -15,12 +16,16 @@ function requireRpc(): boolean {
 async function rpcCall<T = unknown>(method: string, params: unknown[]): Promise<T | null> {
   if (!requireRpc()) return null;
   try {
-    const { data } = await axios.post(rpcUrl as string, {
-      jsonrpc: "2.0",
-      id: "alpha-hunter",
-      method,
-      params,
-    });
+    const { data } = await withRateLimitRetry(
+      () =>
+        axios.post(rpcUrl as string, {
+          jsonrpc: "2.0",
+          id: "alpha-hunter",
+          method,
+          params,
+        }),
+      { label: `helius.rpc.${method}`, retries: 2 }
+    );
     if (data.error) {
       logger.error({ error: data.error, method }, "helius rpc error");
       return null;
@@ -137,6 +142,18 @@ export interface HeliusEnhancedTransaction {
   nativeTransfers?: Array<{ fromUserAccount: string; toUserAccount: string; amount: number }>;
 }
 
+// Helius's REST (enhanced-transactions) API has its own rate limit, separate from the JSON-RPC
+// endpoint — every call goes through this limiter (HELIUS_RATE_LIMIT_PER_SEC in .env) so a burst
+// of per-wallet checks across a scan cycle queues up instead of 429ing.
+const enhancedTxLimiter = new RateLimiter(env.HELIUS_RATE_LIMIT_PER_SEC);
+
+// Short-lived cache of a wallet's recent transactions. hasRecentBuy() and hasRecentSell() both
+// need the same underlying transaction list — without this cache they'd each fire a separate
+// request for the same wallet, doubling call volume for no reason. Also means repeated scan
+// cycles within the TTL window reuse the same fetch instead of re-hitting the API every ~30s.
+const ENHANCED_TX_CACHE_TTL_MS = 3 * 60 * 1000;
+const enhancedTxCache = new Map<string, { data: HeliusEnhancedTransaction[]; expiresAt: number }>();
+
 /**
  * Fetches recent parsed/enhanced transactions for a wallet via Helius's REST API.
  * Requires HELIUS_API_KEY. Used to detect whether a wallet has recently bought a specific token
@@ -150,12 +167,25 @@ export async function getEnhancedTransactions(
     logger.warn("HELIUS_API_KEY not set — cannot fetch enhanced transactions");
     return [];
   }
+
+  const cached = enhancedTxCache.get(address);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
   try {
-    const { data } = await axios.get(
-      `https://api.helius.xyz/v0/addresses/${address}/transactions`,
-      { params: { "api-key": env.HELIUS_API_KEY, limit } }
+    const { data } = await enhancedTxLimiter.schedule(() =>
+      withRateLimitRetry(
+        () =>
+          axios.get(`https://api.helius.xyz/v0/addresses/${address}/transactions`, {
+            params: { "api-key": env.HELIUS_API_KEY, limit },
+          }),
+        { label: "helius.getEnhancedTransactions" }
+      )
     );
-    return Array.isArray(data) ? data : [];
+    const result = Array.isArray(data) ? data : [];
+    enhancedTxCache.set(address, { data: result, expiresAt: Date.now() + ENHANCED_TX_CACHE_TTL_MS });
+    return result;
   } catch (err) {
     logger.error({ err, address }, "helius.getEnhancedTransactions failed");
     return [];
